@@ -36,7 +36,7 @@ class AECored:
             process_name,
         )
 
-        self.watchdog = SystemdWatchdog()
+        self.watchdog = SystemdWatchdog(self.logger)
         self.watchdog.initialize()
 
         self.modules = ModuleManager(self.config, self.logger)
