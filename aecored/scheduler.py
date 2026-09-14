@@ -6,9 +6,9 @@ import sys
 import threading
 from datetime import datetime
 
-from .config import Config, ConfigError
 from .cron_schedule import CronSchedule, CronScheduleError
 from .module import Module
+from .scheduler_config import SchedulerConfig, SchedulerConfigError
 
 
 class SchedulerError(RuntimeError):
@@ -31,8 +31,9 @@ class Scheduler(Module):
     name = "scheduler"
     CONFIG_CHECK_INTERVAL = 1.0
 
-    def __init__(self, config, logger):
+    def __init__(self, config, logger, config_path):
         super().__init__(config, logger)
+        self.config_path = config_path
         self._condition = threading.Condition()
         self._tasks = []
         self._thread = None
@@ -40,14 +41,8 @@ class Scheduler(Module):
         self._config_mtime = None
 
     def initialize(self):
-        """Загрузить задачи из конфигурации и подготовить расписание."""
-        tasks = self._build_tasks(self.config.tasks)
-
-        with self._condition:
-            self._tasks = tasks
-            self._stopping = False
-            self._config_mtime = self._get_config_mtime()
-        return True
+        """Загрузить задачи из отдельной конфигурации Scheduler."""
+        self._reload_config(initial=True)
 
     def start(self):
         """Запустить поток планировщика."""
@@ -89,6 +84,9 @@ class Scheduler(Module):
 
     def _run(self):
         while True:
+            if self._check_config_changed():
+                self._reload_config()
+
             task = self._wait_for_task()
             if task is None:
                 return
@@ -101,10 +99,7 @@ class Scheduler(Module):
             while not self._stopping:
                 if not self._tasks:
                     self._condition.wait(timeout=self.CONFIG_CHECK_INTERVAL)
-                    if self._stopping:
-                        return None
-                    self._reload_config_if_changed()
-                    continue
+                    return None if self._stopping else self._wait_result_after_check()
 
                 now = datetime.now()
                 task = min(self._tasks, key=lambda item: item.next_run)
@@ -116,73 +111,28 @@ class Scheduler(Module):
                     )
                     if self._stopping:
                         return None
-                    self._reload_config_if_changed()
+                    if self._check_config_changed():
+                        self._reload_config()
                     continue
 
                 return task
 
             return None
 
-    def _reload_config_if_changed(self):
-        """Перечитать задачи после изменения файла конфигурации."""
-        if not self._config_changed():
-            return False
+    def _wait_result_after_check(self):
+        """Проверить конфигурацию после ожидания."""
+        if self._check_config_changed():
+            self._reload_config()
+        return None
 
-        try:
-            new_config = Config(self.config.path).load()
-            tasks = self._build_tasks(new_config.tasks)
-        except (ConfigError, CronScheduleError, SchedulerError):
-            self.logger.exception(
-                "Не удалось перечитать конфигурацию планировщика; "
-                "продолжается работа с предыдущей конфигурацией"
-            )
-            self._config_mtime = self._get_config_mtime()
-            return False
-
-        self._tasks = tasks
-        self._config_mtime = self._get_config_mtime()
-        self._condition.notify_all()
-
-        self.logger.info("Конфигурация планировщика перечитана")
-        return True
-
-    def _build_tasks(self, config_tasks):
-        """Создать внутренние задачи из конфигурации."""
-        now = datetime.now()
-        tasks = []
-
-        for item in config_tasks:
-            if not item["enabled"]:
-                self.logger.info("Задача %s отключена", item["name"])
-                continue
-
-            try:
-                schedule = CronSchedule(item["schedule"])
-                task = ScheduledTask(item["name"], item["command"], schedule)
-                task.next_run = schedule.next_run(now)
-            except CronScheduleError as exc:
-                raise SchedulerError(
-                    "Ошибка расписания задачи {}: {}".format(item["name"], exc)
-                )
-
-            tasks.append(task)
-            self.logger.info(
-                "Задача %s зарегистрирована, следующий запуск: %s",
-                task.name,
-                task.next_run.strftime("%Y-%m-%d %H:%M:%S"),
-            )
-
-        return tasks
-
-    def _config_changed(self):
-        """Проверить изменение времени модификации конфигурации."""
+    def _check_config_changed(self):
+        """Проверить изменение файла конфигурации Scheduler."""
         current_mtime = self._get_config_mtime()
         return current_mtime != self._config_mtime
 
     def _get_config_mtime(self):
-        """Получить время изменения файла конфигурации."""
         try:
-            return os.stat(self.config.path).st_mtime_ns
+            return os.stat(self.config_path).st_mtime_ns
         except OSError:
             return None
 
@@ -206,5 +156,48 @@ class Scheduler(Module):
     def _schedule_next(self, task):
         """Вычислить следующее время запуска задачи."""
         with self._condition:
-            task.next_run = task.schedule.next_run(task.next_run)
-            self._condition.notify()
+            task.next_run = task.schedule.next_run(datetime.now())
+            self._condition.notify_all()
+
+    def _reload_config(self, initial=False):
+        """Перечитать конфигурацию Scheduler."""
+        scheduler_config = SchedulerConfig(self.config_path)
+
+        try:
+            scheduler_config.load()
+            now = datetime.now()
+            tasks = []
+
+            for item in scheduler_config.tasks:
+                if not item["enabled"]:
+                    self.logger.info("Задача %s отключена", item["name"])
+                    continue
+
+                schedule = CronSchedule(item["schedule"])
+                task = ScheduledTask(item["name"], item["command"], schedule)
+                task.next_run = schedule.next_run(now)
+                tasks.append(task)
+
+        except (SchedulerConfigError, CronScheduleError) as exc:
+            if initial:
+                raise SchedulerError(str(exc))
+
+            self.logger.error(
+                "Не удалось перечитать конфигурацию Scheduler: %s. "
+                "Сохраняется предыдущая конфигурация.",
+                exc,
+            )
+            self._config_mtime = self._get_config_mtime()
+            return False
+
+        with self._condition:
+            self._tasks = tasks
+            self._config_mtime = self._get_config_mtime()
+            self._condition.notify_all()
+
+        self.logger.info(
+            "Конфигурация Scheduler %s: задач: %s",
+            "загружена" if not initial else "инициализирована",
+            len(tasks),
+        )
+        return True
