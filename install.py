@@ -22,16 +22,21 @@ def require_root():
 
 
 def check_python():
-    """Проверить версию Python и наличие модуля venv."""
+    """Проверить Python и при необходимости установить python3-venv."""
     if sys.version_info < (3, 7):
         raise RuntimeError("Требуется Python 3.7 или новее")
 
     try:
         import venv  # noqa: F401
     except ImportError:
-        raise RuntimeError(
-            "Не найден модуль venv. Установите пакет python3-venv через apt."
-        )
+        print("Не найден python3-venv. Устанавливаю пакет через apt...")
+        run(["apt-get", "update"])
+        run(["apt-get", "install", "-y", "python3-venv"])
+
+        try:
+            import venv  # noqa: F401
+        except ImportError:
+            raise RuntimeError("Не удалось установить python3-venv")
 
 
 def check_command(command):
