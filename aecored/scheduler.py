@@ -1,5 +1,6 @@
 """Планировщик запуска внешних Python-программ AECored."""
 
+import configparser
 import os
 import subprocess
 import sys
@@ -35,6 +36,7 @@ class Scheduler(Module):
         super().__init__(config, logger)
         self.config_path = config_path
         self._condition = threading.Condition()
+        self._config_lock = threading.Lock()
         self._tasks = []
         self._thread = None
         self._stopping = False
@@ -81,6 +83,97 @@ class Scheduler(Module):
         with self._condition:
             self._tasks = []
         return True
+
+    def get_tasks(self):
+        """Вернуть текущее состояние задач Scheduler."""
+        with self._condition:
+            return [
+                {
+                    "name": task.name,
+                    "command": task.command,
+                    "schedule": task.schedule.expression,
+                    "next_run": task.next_run.isoformat() if task.next_run else None,
+                }
+                for task in self._tasks
+            ]
+
+    def add_task(self, name, command, schedule, enabled=True):
+        """Добавить или заменить задачу и сохранить её в scheduler.ini."""
+        if not name:
+            raise ValueError("Имя задачи не может быть пустым")
+        if "/" in name or "\\" in name or "[" in name or "]" in name:
+            raise ValueError("Имя задачи содержит недопустимые символы")
+        if not command:
+            raise ValueError("Команда не может быть пустой")
+
+        try:
+            CronSchedule(schedule)
+        except CronScheduleError as exc:
+            raise ValueError(str(exc))
+
+        with self._config_lock:
+            parser = self._read_config_parser()
+            section = "task:{}".format(name)
+            parser[section] = {
+                "enabled": "yes" if enabled else "no",
+                "command": command,
+                "schedule": schedule,
+            }
+            self._write_config_parser(parser)
+
+        if not self._reload_config():
+            raise ValueError("Не удалось применить новую задачу Scheduler")
+
+        self.logger.info("Задача %s добавлена через HTTP-модуль", name)
+
+        with self._condition:
+            task = next((item for item in self._tasks if item.name == name), None)
+            if task is None:
+                raise ValueError("Задача не найдена после загрузки конфигурации")
+            return {
+                "name": task.name,
+                "command": task.command,
+                "schedule": task.schedule.expression,
+                "next_run": task.next_run.isoformat() if task.next_run else None,
+            }
+
+    def remove_task(self, name):
+        """Удалить задачу и сохранить изменение в scheduler.ini."""
+        with self._config_lock:
+            parser = self._read_config_parser()
+            section = "task:{}".format(name)
+            if not parser.has_section(section):
+                raise KeyError(name)
+            parser.remove_section(section)
+            self._write_config_parser(parser)
+
+        if not self._reload_config():
+            raise ValueError("Не удалось применить удаление задачи Scheduler")
+
+        self.logger.info("Задача %s удалена через HTTP-модуль", name)
+
+    def _read_config_parser(self):
+        """Загрузить scheduler.ini для изменения."""
+        parser = configparser.ConfigParser()
+        if not parser.read(self.config_path, encoding="utf-8"):
+            raise ValueError(
+                "Файл конфигурации Scheduler не найден: {}".format(self.config_path)
+            )
+        return parser
+
+    def _write_config_parser(self, parser):
+        """Сохранить scheduler.ini."""
+        temporary_path = "{}.tmp".format(self.config_path)
+        try:
+            with open(temporary_path, "w", encoding="utf-8") as config_file:
+                parser.write(config_file)
+            os.replace(temporary_path, self.config_path)
+        except OSError as exc:
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+            raise ValueError("Не удалось сохранить scheduler.ini: {}".format(exc))
 
     def _run(self):
         while True:
