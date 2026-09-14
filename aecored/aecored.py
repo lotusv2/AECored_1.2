@@ -7,6 +7,7 @@ import sys
 import time
 
 from .config import Config, ConfigError
+from .http import HttpModule
 from .lifecycle import ModuleManager
 from .process_name import ProcessNameError, set_process_name
 from .scheduler import Scheduler
@@ -24,6 +25,7 @@ class AECored:
         self.watchdog = None
         self.modules = None
         self.scheduler = None
+        self.http = None
         self.running = False
         self._stopping = False
 
@@ -55,7 +57,10 @@ class AECored:
             self.logger,
             self.scheduler_config_path,
         )
+        self.http = HttpModule(self.config, self.logger, self.scheduler)
+
         self.modules.register(self.scheduler)
+        self.modules.register(self.http)
         self.modules.initialize()
 
     def start(self):
