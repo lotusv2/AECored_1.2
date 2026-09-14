@@ -89,8 +89,6 @@ class Scheduler(Module):
 
     def _run(self):
         while True:
-            self._reload_config_if_changed()
-
             task = self._wait_for_task()
             if task is None:
                 return
@@ -103,7 +101,10 @@ class Scheduler(Module):
             while not self._stopping:
                 if not self._tasks:
                     self._condition.wait(timeout=self.CONFIG_CHECK_INTERVAL)
-                    return None if self._stopping else self._check_and_continue()
+                    if self._stopping:
+                        return None
+                    self._reload_config_if_changed()
+                    continue
 
                 now = datetime.now()
                 task = min(self._tasks, key=lambda item: item.next_run)
@@ -115,19 +116,12 @@ class Scheduler(Module):
                     )
                     if self._stopping:
                         return None
-                    if self._config_changed():
-                        return None
+                    self._reload_config_if_changed()
                     continue
 
                 return task
 
             return None
-
-    def _check_and_continue(self):
-        """Проверить конфигурацию после ожидания без задач."""
-        if self._config_changed():
-            return None
-        return None
 
     def _reload_config_if_changed(self):
         """Перечитать задачи после изменения файла конфигурации."""
@@ -145,10 +139,9 @@ class Scheduler(Module):
             self._config_mtime = self._get_config_mtime()
             return False
 
-        with self._condition:
-            self._tasks = tasks
-            self._config_mtime = self._get_config_mtime()
-            self._condition.notify_all()
+        self._tasks = tasks
+        self._config_mtime = self._get_config_mtime()
+        self._condition.notify_all()
 
         self.logger.info("Конфигурация планировщика перечитана")
         return True
