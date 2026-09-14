@@ -89,7 +89,10 @@ class Scheduler(Module):
 
             task = self._wait_for_task()
             if task is None:
-                return
+                with self._condition:
+                    if self._stopping:
+                        return
+                continue
 
             self._start_task(task)
             self._schedule_next(task)
@@ -99,7 +102,7 @@ class Scheduler(Module):
             while not self._stopping:
                 if not self._tasks:
                     self._condition.wait(timeout=self.CONFIG_CHECK_INTERVAL)
-                    return None if self._stopping else self._wait_result_after_check()
+                    return None
 
                 now = datetime.now()
                 task = min(self._tasks, key=lambda item: item.next_run)
@@ -111,19 +114,11 @@ class Scheduler(Module):
                     )
                     if self._stopping:
                         return None
-                    if self._check_config_changed():
-                        self._reload_config()
-                    continue
+                    return None
 
                 return task
 
             return None
-
-    def _wait_result_after_check(self):
-        """Проверить конфигурацию после ожидания."""
-        if self._check_config_changed():
-            self._reload_config()
-        return None
 
     def _check_config_changed(self):
         """Проверить изменение файла конфигурации Scheduler."""
@@ -131,6 +126,7 @@ class Scheduler(Module):
         return current_mtime != self._config_mtime
 
     def _get_config_mtime(self):
+        """Получить время изменения файла конфигурации."""
         try:
             return os.stat(self.config_path).st_mtime_ns
         except OSError:
