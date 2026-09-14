@@ -1,9 +1,11 @@
-"""Планировщик фоновых задач AECored."""
+"""Планировщик запуска внешних Python-программ AECored."""
 
-import heapq
+import subprocess
+import sys
 import threading
-import time
+from datetime import datetime
 
+from .cron_schedule import CronSchedule, CronScheduleError
 from .module import Module
 
 
@@ -12,37 +14,55 @@ class SchedulerError(RuntimeError):
 
 
 class ScheduledTask:
-    """Описание одной задачи планировщика."""
+    """Описание задачи планировщика."""
 
-    def __init__(self, task_id, name, callback, interval=None, run_at=None):
-        self.task_id = task_id
+    def __init__(self, name, command, schedule):
         self.name = name
-        self.callback = callback
-        self.interval = interval
-        self.run_at = run_at
-        self.cancelled = False
+        self.command = command
+        self.schedule = schedule
+        self.next_run = None
 
 
 class Scheduler(Module):
-    """Планировщик периодических и одноразовых фоновых задач."""
+    """Запускает внешние Python-программы по cron-расписанию."""
 
     name = "scheduler"
 
     def __init__(self, config, logger):
         super().__init__(config, logger)
         self._condition = threading.Condition()
-        self._tasks = {}
-        self._queue = []
-        self._sequence = 0
+        self._tasks = []
         self._thread = None
         self._stopping = False
 
     def initialize(self):
-        """Подготовить планировщик к запуску."""
+        """Загрузить задачи из конфигурации и подготовить расписание."""
+        now = datetime.now()
+        tasks = []
+
+        for item in self.config.tasks:
+            if not item["enabled"]:
+                self.logger.info("Задача %s отключена", item["name"])
+                continue
+
+            try:
+                schedule = CronSchedule(item["schedule"])
+                task = ScheduledTask(item["name"], item["command"], schedule)
+                task.next_run = schedule.next_run(now)
+            except CronScheduleError as exc:
+                raise SchedulerError(
+                    "Ошибка расписания задачи {}: {}".format(item["name"], exc)
+                )
+
+            tasks.append(task)
+            self.logger.info(
+                "Задача %s зарегистрирована, следующий запуск: %s",
+                task.name,
+                task.next_run.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+
         with self._condition:
-            self._tasks.clear()
-            self._queue = []
-            self._sequence = 0
+            self._tasks = tasks
             self._stopping = False
         return True
 
@@ -61,50 +81,6 @@ class Scheduler(Module):
             self._thread.start()
 
         self.logger.info("Модуль %s запущен", self.name)
-
-    def add_interval(self, name, interval, callback, immediate=False):
-        """Добавить периодическую задачу и вернуть её идентификатор."""
-        if interval <= 0:
-            raise SchedulerError("Интервал задачи должен быть больше нуля")
-        if not callable(callback):
-            raise SchedulerError("callback задачи должен быть вызываемым объектом")
-
-        first_run = time.monotonic()
-        if not immediate:
-            first_run += interval
-
-        return self._add_task(
-            name=name,
-            callback=callback,
-            interval=float(interval),
-            run_at=first_run,
-        )
-
-    def add_once(self, name, delay, callback):
-        """Добавить одноразовую задачу и вернуть её идентификатор."""
-        if delay < 0:
-            raise SchedulerError("Задержка задачи не может быть отрицательной")
-        if not callable(callback):
-            raise SchedulerError("callback задачи должен быть вызываемым объектом")
-
-        return self._add_task(
-            name=name,
-            callback=callback,
-            interval=None,
-            run_at=time.monotonic() + float(delay),
-        )
-
-    def cancel(self, task_id):
-        """Отменить задачу по идентификатору."""
-        with self._condition:
-            task = self._tasks.get(task_id)
-            if task is None:
-                return False
-
-            task.cancelled = True
-            del self._tasks[task_id]
-            self._condition.notify()
-            return True
 
     def stop(self):
         """Остановить поток планировщика."""
@@ -125,25 +101,8 @@ class Scheduler(Module):
         """Освободить ресурсы планировщика."""
         self.stop()
         with self._condition:
-            self._tasks.clear()
-            self._queue = []
+            self._tasks = []
         return True
-
-    def _add_task(self, name, callback, interval, run_at):
-        with self._condition:
-            self._sequence += 1
-            task_id = self._sequence
-            task = ScheduledTask(
-                task_id=task_id,
-                name=name,
-                callback=callback,
-                interval=interval,
-                run_at=run_at,
-            )
-            self._tasks[task_id] = task
-            heapq.heappush(self._queue, (run_at, task_id))
-            self._condition.notify()
-            return task_id
 
     def _run(self):
         while True:
@@ -151,47 +110,47 @@ class Scheduler(Module):
             if task is None:
                 return
 
-            try:
-                task.callback()
-            except Exception:
-                self.logger.exception(
-                    "Планировщик: ошибка выполнения задачи %s",
-                    task.name,
-                )
-
-            if task.interval is not None:
-                self._reschedule(task)
-            else:
-                with self._condition:
-                    self._tasks.pop(task.task_id, None)
+            self._start_task(task)
+            self._schedule_next(task)
 
     def _wait_for_task(self):
         with self._condition:
             while not self._stopping:
-                if not self._queue:
+                if not self._tasks:
                     self._condition.wait()
                     continue
 
-                run_at, task_id = self._queue[0]
-                delay = run_at - time.monotonic()
+                now = datetime.now()
+                task = min(self._tasks, key=lambda item: item.next_run)
+                delay = (task.next_run - now).total_seconds()
+
                 if delay > 0:
                     self._condition.wait(timeout=delay)
-                    continue
-
-                heapq.heappop(self._queue)
-                task = self._tasks.get(task_id)
-                if task is None or task.cancelled:
                     continue
 
                 return task
 
             return None
 
-    def _reschedule(self, task):
-        with self._condition:
-            if self._stopping or task.cancelled or task.task_id not in self._tasks:
-                return
+    def _start_task(self, task):
+        """Запустить программу задачи и не ждать её завершения."""
+        try:
+            process = subprocess.Popen([sys.executable, task.command])
+            self.logger.info(
+                "Задача %s запущена: %s (PID=%s)",
+                task.name,
+                task.command,
+                process.pid,
+            )
+        except OSError:
+            self.logger.exception(
+                "Не удалось запустить задачу %s: %s",
+                task.name,
+                task.command,
+            )
 
-            task.run_at = time.monotonic() + task.interval
-            heapq.heappush(self._queue, (task.run_at, task.task_id))
+    def _schedule_next(self, task):
+        """Вычислить следующее время запуска задачи."""
+        with self._condition:
+            task.next_run = task.schedule.next_run(task.next_run)
             self._condition.notify()
