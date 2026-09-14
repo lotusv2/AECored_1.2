@@ -10,6 +10,7 @@ from .config import Config, ConfigError
 from .core_module import CoreModule
 from .lifecycle import ModuleManager
 from .process_name import ProcessNameError, set_process_name
+from .scheduler import Scheduler
 from .systemd_watchdog import SystemdWatchdog
 
 
@@ -22,6 +23,7 @@ class AECored:
         self.logger = logging.getLogger("AECored")
         self.watchdog = None
         self.modules = None
+        self.scheduler = None
         self.running = False
         self._stopping = False
 
@@ -40,6 +42,8 @@ class AECored:
         self.watchdog.initialize()
 
         self.modules = ModuleManager(self.config, self.logger)
+        self.scheduler = Scheduler(self.config, self.logger)
+        self.modules.register(self.scheduler)
         self.modules.register(CoreModule(self.config, self.logger))
         self.modules.initialize()
 
