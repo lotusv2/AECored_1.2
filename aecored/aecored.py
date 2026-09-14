@@ -19,6 +19,7 @@ class AECored:
 
     def __init__(self, config_path):
         self.config_path = config_path
+        self.scheduler_config_path = self._get_scheduler_config_path(config_path)
         self.config = Config(config_path)
         self.logger = logging.getLogger("AECored")
         self.watchdog = None
@@ -26,6 +27,14 @@ class AECored:
         self.scheduler = None
         self.running = False
         self._stopping = False
+
+    @staticmethod
+    def _get_scheduler_config_path(config_path):
+        """Получить путь к отдельной конфигурации Scheduler."""
+        import os
+
+        directory = os.path.dirname(os.path.abspath(config_path))
+        return os.path.join(directory, "scheduler.ini")
 
     def initialize(self):
         """Загрузить конфигурацию и инициализировать подсистемы."""
@@ -42,7 +51,11 @@ class AECored:
         self.watchdog.initialize()
 
         self.modules = ModuleManager(self.config, self.logger)
-        self.scheduler = Scheduler(self.config, self.logger)
+        self.scheduler = Scheduler(
+            self.config,
+            self.logger,
+            self.scheduler_config_path,
+        )
         self.modules.register(self.scheduler)
         self.modules.register(CoreModule(self.config, self.logger))
         self.modules.initialize()
@@ -115,7 +128,7 @@ def main(argv=None):
         "config",
         nargs="?",
         default="config.ini",
-        help="путь к конфигурационному файлу",
+        help="путь к основной конфигурации AECored",
     )
     args = parser.parse_args(argv)
 
