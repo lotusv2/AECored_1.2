@@ -7,7 +7,6 @@ import sys
 import time
 
 from .config import Config, ConfigError
-from .core_module import CoreModule
 from .lifecycle import ModuleManager
 from .process_name import ProcessNameError, set_process_name
 from .scheduler import Scheduler
@@ -57,7 +56,6 @@ class AECored:
             self.scheduler_config_path,
         )
         self.modules.register(self.scheduler)
-        self.modules.register(CoreModule(self.config, self.logger))
         self.modules.initialize()
 
     def start(self):
