@@ -40,16 +40,21 @@ def check_command(command):
         raise RuntimeError("Не найдена системная команда: {}".format(command))
 
 
-def run(command, cwd=None):
+def run(command, cwd=None, check=True):
     """Выполнить системную команду."""
-    subprocess.run(command, cwd=cwd, check=True)
+    return subprocess.run(command, cwd=cwd, check=check)
+
+
+def run_optional(command, cwd=None):
+    """Выполнить команду, не считая отсутствие сервиса ошибкой."""
+    return run(command, cwd=cwd, check=False)
 
 
 def validate_user_id(user_id):
     """Проверить идентификатор пользователя."""
     try:
         value = int(user_id)
-    except ValueError:
+    except (TypeError, ValueError):
         raise ValueError("user_id должен быть целым числом")
 
     if value < 1:
@@ -66,14 +71,6 @@ def service_name(user_id):
 def instance_dir(user_id):
     """Получить каталог экземпляра."""
     return BASE_DIR / str(user_id)
-
-
-def read_user_id(config_path):
-    """Прочитать user_id из конфигурации."""
-    parser = configparser.ConfigParser()
-    if not parser.read(str(config_path), encoding="utf-8"):
-        raise RuntimeError("Файл конфигурации не найден: {}".format(config_path))
-    return validate_user_id(parser.get("aecored", "user_id"))
 
 
 def write_config(path, user_id):
@@ -125,6 +122,11 @@ WantedBy=multi-user.target
     return service_path
 
 
+def prepare_python_venv(target_dir):
+    """Создать изолированное окружение Python для экземпляра."""
+    run([sys.executable, "-m", "venv", str(target_dir / ".venv")])
+
+
 def install_from_source(source_dir, user_id):
     """Установить AECored из локального дерева репозитория."""
     source_dir = Path(source_dir).resolve()
@@ -137,7 +139,7 @@ def install_from_source(source_dir, user_id):
     target_dir = instance_dir(user_id)
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    run(["systemctl", "stop", service_name(user_id)], cwd=source_dir)
+    run_optional(["systemctl", "stop", service_name(user_id)], cwd=source_dir)
 
     if target_dir.exists():
         shutil.rmtree(str(target_dir))
@@ -151,8 +153,7 @@ def install_from_source(source_dir, user_id):
         write_config(target_dir / "config.ini", user_id)
 
     write_config(target_dir / "config.ini", user_id)
-
-    run([sys.executable, "-m", "venv", str(target_dir / ".venv")])
+    prepare_python_venv(target_dir)
     create_service(user_id, target_dir)
 
     run(["systemctl", "daemon-reload"])
@@ -187,7 +188,7 @@ def update_instance(user_id):
     repo_dir, temp_dir = clone_repository()
     try:
         run(["systemctl", "stop", service_name(user_id)])
-        run(["systemctl", "disable", service_name(user_id)])
+        run_optional(["systemctl", "disable", service_name(user_id)])
 
         if target_dir.exists():
             shutil.rmtree(str(target_dir))
@@ -200,7 +201,7 @@ def update_instance(user_id):
         else:
             write_config(config_path, user_id)
 
-        run([sys.executable, "-m", "venv", str(target_dir / ".venv")])
+        prepare_python_venv(target_dir)
         create_service(user_id, target_dir)
         run(["systemctl", "daemon-reload"])
         run(["systemctl", "enable", service_name(user_id)])
@@ -216,8 +217,8 @@ def remove_instance(user_id):
     target_dir = instance_dir(user_id)
     service_path = SYSTEMD_DIR / name
 
-    run(["systemctl", "stop", name])
-    run(["systemctl", "disable", name])
+    run_optional(["systemctl", "stop", name])
+    run_optional(["systemctl", "disable", name])
 
     if service_path.exists():
         service_path.unlink()
