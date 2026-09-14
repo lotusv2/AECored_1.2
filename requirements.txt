@@ -1,0 +1,3 @@
+# Flask с поддержкой Python 3.7+
+Flask==2.2.5
+Werkzeug==2.2.3
