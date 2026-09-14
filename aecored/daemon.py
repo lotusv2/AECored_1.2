@@ -5,11 +5,11 @@ import logging
 import signal
 import sys
 import threading
-import time
 
 from .config import Config, ConfigError
 from .core_module import CoreModule
 from .lifecycle import ModuleManager
+from .process_name import set_process_name
 from .systemd_watchdog import SystemdWatchdog
 
 
@@ -27,7 +27,12 @@ class AECored:
         """Загрузить конфигурацию и инициализировать подсистемы."""
         self.config.load()
 
-        self.logger.info("AECored: инициализация, user_id=%s", self.config.user_id)
+        process_name = set_process_name(self.config.user_id)
+        self.logger.info(
+            "AECored: инициализация, user_id=%s, process_name=%s",
+            self.config.user_id,
+            process_name,
+        )
 
         self.watchdog = SystemdWatchdog(self.logger)
         self.watchdog.initialize()
