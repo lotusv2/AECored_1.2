@@ -60,6 +60,7 @@ class Scheduler(Module):
             )
             self._thread.start()
 
+        self.logger.info("Scheduler: рабочий поток создаётся")
         self.logger.info("Модуль %s запущен", self.name)
 
     def stop(self):
@@ -176,19 +177,33 @@ class Scheduler(Module):
             raise ValueError("Не удалось сохранить scheduler.ini: {}".format(exc))
 
     def _run(self):
-        while True:
-            if self._check_config_changed():
-                self._reload_config()
+        """Рабочий цикл Scheduler."""
+        self.logger.info("Scheduler: рабочий цикл запущен")
+        try:
+            while True:
+                if self._check_config_changed():
+                    self.logger.info("Scheduler: обнаружено изменение конфигурации")
+                    self._reload_config()
 
-            task = self._wait_for_task()
-            if task is None:
-                with self._condition:
-                    if self._stopping:
-                        return
-                continue
+                task = self._wait_for_task()
+                if task is None:
+                    with self._condition:
+                        if self._stopping:
+                            self.logger.info("Scheduler: рабочий цикл остановлен")
+                            return
+                    continue
 
-            self._start_task(task)
-            self._schedule_next(task)
+                self.logger.info(
+                    "Scheduler: наступило время задачи '%s' (schedule=%s)",
+                    task.name,
+                    task.schedule.expression,
+                )
+                self._start_task(task)
+                self._schedule_next(task)
+        except Exception:
+            self.logger.exception("Scheduler: критическая ошибка рабочего цикла")
+            with self._condition:
+                self.running = False
 
     def _wait_for_task(self):
         with self._condition:
@@ -227,19 +242,46 @@ class Scheduler(Module):
 
     def _start_task(self, task):
         """Запустить программу задачи и не ждать её завершения."""
+        self.logger.info(
+            "Scheduler: запуск задачи '%s': python %s",
+            task.name,
+            task.command,
+        )
         try:
             process = subprocess.Popen([sys.executable, task.command])
             self.logger.info(
-                "Задача %s запущена: %s (PID=%s)",
+                "Scheduler: задача '%s' запущена, PID=%s",
                 task.name,
-                task.command,
                 process.pid,
             )
+            threading.Thread(
+                target=self._wait_for_process,
+                args=(task.name, process),
+                name="aecored-task-{}".format(task.name),
+                daemon=True,
+            ).start()
         except OSError:
             self.logger.exception(
-                "Не удалось запустить задачу %s: %s",
+                "Scheduler: не удалось запустить задачу '%s': %s",
                 task.name,
                 task.command,
+            )
+
+    def _wait_for_process(self, task_name, process):
+        """Дождаться завершения задачи и записать код возврата."""
+        try:
+            return_code = process.wait()
+            self.logger.info(
+                "Scheduler: задача '%s' завершена, код=%s, PID=%s",
+                task_name,
+                return_code,
+                process.pid,
+            )
+        except Exception:
+            self.logger.exception(
+                "Scheduler: ошибка ожидания задачи '%s', PID=%s",
+                task_name,
+                process.pid,
             )
 
     def _schedule_next(self, task):
@@ -247,6 +289,11 @@ class Scheduler(Module):
         with self._condition:
             task.next_run = task.schedule.next_run(datetime.now())
             self._condition.notify_all()
+            self.logger.info(
+                "Scheduler: следующая задача '%s' запланирована на %s",
+                task.name,
+                task.next_run.isoformat(),
+            )
 
     def _reload_config(self, initial=False):
         """Перечитать конфигурацию Scheduler."""
@@ -266,6 +313,11 @@ class Scheduler(Module):
                 task = ScheduledTask(item["name"], item["command"], schedule)
                 task.next_run = schedule.next_run(now)
                 tasks.append(task)
+                self.logger.info(
+                    "Scheduler: задача '%s' загружена, следующий запуск: %s",
+                    task.name,
+                    task.next_run.isoformat(),
+                )
 
         except (SchedulerConfigError, CronScheduleError) as exc:
             if initial:
