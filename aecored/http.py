@@ -30,7 +30,8 @@ class HttpModule(Module):
             "HTTP-модуль: порт=%s, защита паролем включена",
             self.config.http_port,
         )
-
+        return True
+        
     def start(self):
         """Запустить HTTP-сервер в отдельном потоке."""
         if self.running:
