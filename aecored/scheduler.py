@@ -44,7 +44,7 @@ class Scheduler(Module):
 
     def initialize(self):
         """Загрузить задачи из отдельной конфигурации Scheduler."""
-        self._reload_config(initial=True)
+        return self._reload_config(initial=True)
 
     def start(self):
         """Запустить поток планировщика."""
