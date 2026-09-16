@@ -240,17 +240,25 @@ class Scheduler(Module):
         except OSError:
             return None
 
+    def _resolve_command_path(self, command):
+        """Преобразовать путь задачи в абсолютный путь относительно корня AECored."""
+        if os.path.isabs(command):
+            return command
+        return os.path.abspath(os.path.join(self.config.paths["root"], command))
+
     def _start_task(self, task):
         """Запустить программу задачи и не ждать её завершения."""
+        command_path = self._resolve_command_path(task.command)
         self.logger.info(
             "Scheduler: запуск задачи '%s': python %s",
             task.name,
-            task.command,
+            command_path,
         )
         try:
             environment = self._build_task_environment(task)
             process = subprocess.Popen(
-                [sys.executable, task.command],
+                [sys.executable, command_path],
+                cwd=self.config.paths["root"],
                 env=environment,
             )
             self.logger.info(
@@ -268,7 +276,7 @@ class Scheduler(Module):
             self.logger.exception(
                 "Scheduler: не удалось запустить задачу '%s': %s",
                 task.name,
-                task.command,
+                command_path,
             )
 
     def _build_task_environment(self, task):
