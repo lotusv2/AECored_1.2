@@ -29,7 +29,9 @@ class Config:
 
     def load(self):
         """Загрузить и проверить основную конфигурацию."""
-        parser = configparser.ConfigParser()
+        # Не используем интерполяцию ConfigParser, поскольку формат Python logging
+        # содержит конструкции %(asctime)s, %(levelname)s и другие плейсхолдеры.
+        parser = configparser.RawConfigParser()
 
         if not parser.read(self.path, encoding="utf-8"):
             raise ConfigError("Файл конфигурации не найден: {}".format(self.path))
