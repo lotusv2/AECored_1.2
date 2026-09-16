@@ -26,9 +26,12 @@ class CronSchedule:
 
         self._fields = []
         self._wildcards = []
-        for value, limits in zip(fields, self.FIELD_LIMITS):
+        for index, (value, limits) in enumerate(zip(fields, self.FIELD_LIMITS)):
             self._fields.append(self._parse_field(value, limits))
-            self._wildcards.append(value.strip() == "*")
+            self._wildcards.append(
+                index in (2, 4)
+                and any(item.strip().startswith("*") for item in value.split(","))
+            )
 
     def next_run(self, after):
         """Вернуть ближайшее время запуска после указанного момента."""
@@ -62,12 +65,7 @@ class CronSchedule:
             # задача запускается при совпадении любого из них.
             day_matches = day_of_month_matches or day_of_week_matches
 
-        return (
-            minute_matches
-            and hour_matches
-            and day_matches
-            and month_matches
-        )
+        return minute_matches and hour_matches and day_matches and month_matches
 
     @staticmethod
     def _parse_field(value, limits):
@@ -120,7 +118,10 @@ class CronSchedule:
 
             values = range(start, end + 1, step)
             if maximum == 7:
-                result.update(0 if item_value == 7 else item_value for item_value in values)
+                result.update(
+                    0 if item_value == 7 else item_value
+                    for item_value in values
+                )
             else:
                 result.update(values)
 
