@@ -15,7 +15,7 @@ class CronSchedule:
         (0, 23),
         (1, 31),
         (1, 12),
-        (0, 6),
+        (0, 7),
     )
 
     def __init__(self, expression):
@@ -25,8 +25,10 @@ class CronSchedule:
             raise CronScheduleError("Cron-выражение должно содержать 5 полей")
 
         self._fields = []
+        self._wildcards = []
         for value, limits in zip(fields, self.FIELD_LIMITS):
             self._fields.append(self._parse_field(value, limits))
+            self._wildcards.append(value.strip() == "*")
 
     def next_run(self, after):
         """Вернуть ближайшее время запуска после указанного момента."""
@@ -43,12 +45,28 @@ class CronSchedule:
         )
 
     def _matches(self, value):
+        minute_matches = value.minute in self._fields[0]
+        hour_matches = value.hour in self._fields[1]
+        month_matches = value.month in self._fields[3]
+
+        # Python: понедельник=0...воскресенье=6.
+        # Cron: воскресенье=0 или 7, понедельник=1...суббота=6.
+        cron_weekday = (value.weekday() + 1) % 7
+        day_of_month_matches = value.day in self._fields[2]
+        day_of_week_matches = cron_weekday in self._fields[4]
+
+        if self._wildcards[2] or self._wildcards[4]:
+            day_matches = day_of_month_matches and day_of_week_matches
+        else:
+            # Стандартная cron-семантика: при заданных обоих полях
+            # задача запускается при совпадении любого из них.
+            day_matches = day_of_month_matches or day_of_week_matches
+
         return (
-            value.minute in self._fields[0]
-            and value.hour in self._fields[1]
-            and value.day in self._fields[2]
-            and value.month in self._fields[3]
-            and value.weekday() in self._fields[4]
+            minute_matches
+            and hour_matches
+            and day_matches
+            and month_matches
         )
 
     @staticmethod
@@ -100,6 +118,10 @@ class CronSchedule:
                     "Значение cron-поля вне диапазона: {}".format(item)
                 )
 
-            result.update(range(start, end + 1, step))
+            values = range(start, end + 1, step)
+            if maximum == 7:
+                result.update(0 if item_value == 7 else item_value for item_value in values)
+            else:
+                result.update(values)
 
         return frozenset(result)
