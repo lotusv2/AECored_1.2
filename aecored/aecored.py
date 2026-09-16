@@ -62,6 +62,7 @@ class AECored:
             self.config,
             self.cflogger.get_logger("scheduler"),
             self.scheduler_config_path,
+            self.cflogger,
         )
         self.http = HttpModule(
             self.config,
@@ -111,13 +112,14 @@ class AECored:
 
         if self.modules is not None:
             self.modules.stop()
+            if self.logger is not None:
+                self.logger.info("AECored: остановлен")
             self.modules.shutdown()
+        elif self.logger is not None:
+            self.logger.info("AECored: остановлен")
 
         if self.watchdog is not None:
             self.watchdog.shutdown()
-
-        if self.logger is not None:
-            self.logger.info("AECored: остановлен")
 
 
 def install_signal_handlers(daemon):
