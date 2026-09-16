@@ -20,10 +20,21 @@ class CFLogger:
 
     def __init__(self, config_path):
         self.config_path = os.path.abspath(config_path)
-        self.root_path = os.path.dirname(os.path.dirname(self.config_path))
+        self.root_path = self._get_root_path(self.config_path)
         self.logs_path = os.path.join(self.root_path, "logs")
         self.running = False
         self._handlers = {}
+
+    @staticmethod
+    def _get_root_path(config_path):
+        """Определить корень установки по расположению config.ini."""
+        config_dir = os.path.dirname(os.path.abspath(config_path))
+        if os.path.basename(config_dir) == "config":
+            parent_dir = os.path.dirname(config_dir)
+            if os.path.basename(parent_dir) == "core":
+                return os.path.dirname(parent_dir)
+            return parent_dir
+        return config_dir
 
     def initialize(self):
         """Подготовить каталог локальных логов."""
