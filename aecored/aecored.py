@@ -47,8 +47,10 @@ class AECored:
 
         self.watchdog = SystemdWatchdog(self.logger)
         self.watchdog.initialize()
-
         self.modules = ModuleManager(self.config, self.logger)
+
+        # CFLogger нужен всем остальным модулям и поэтому регистрируется первым.
+        self.modules.register(self.cflogger)
 
         if self.config.modules.get("scheduler", False):
             self.scheduler = Scheduler(
@@ -73,7 +75,6 @@ class AECored:
         else:
             self.logger.info("Модуль http отключён конфигурацией")
 
-        self.modules.register(self.cflogger)
         self.modules.initialize()
 
     def start(self):
