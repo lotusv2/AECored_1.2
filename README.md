@@ -17,67 +17,36 @@ AECored_1.2/
 │   ├── core_module.py         # Минимальный внутренний модуль ядра
 │   ├── systemd_watchdog.py    # Интеграция с watchdog systemd
 │   └── process_name.py        # Установка имени процесса Linux
-├── config.ini                 # Шаблон конфигурации
+├── config/
+│   └── config.ini             # Шаблон основной конфигурации
+├── tests/
+├── requirements.txt
 └── .gitignore
 ```
 
 ## Конфигурация
 
-Пока используется только идентификатор пользователя:
+Основной шаблон конфигурации хранится в `config/config.ini`. Он используется как единый шаблон для установщика AEInstall.
+
+При установке AEInstall копирует этот шаблон в конфигурацию конкретного экземпляра и подставляет параметры клиента, включая `user_id` и пути установки.
+
+Пример:
 
 ```ini
 [aecored]
 user_id = 10
+
+[paths]
+root = /home/activ-energy
+config = /home/activ-energy/config
+logs = /home/activ-energy/logs
+drivers = /home/activ-energy/drivers
+data = /home/activ-energy/data
+run = /home/activ-energy/run
 ```
 
-Значение `10` является временным. При установке экземпляра AEInstall создаёт собственную конфигурацию с реальным ID пользователя.
-
-## Установка
-
-Установка AECored выполняется не из этого репозитория, а через репозиторий AEInstall.
-
-Пример:
+Для ручного запуска можно явно указать путь к конфигурации:
 
 ```bash
-./AEinstall.sh --userid 10
+python3 -m aecored.aecored /path/to/aecored.ini
 ```
-
-AEInstall загружает актуальный код AECored из GitHub и устанавливает его как systemd-сервис:
-
-```text
-10_AECored.service
-```
-
-Для одного `user_id` используется отдельный экземпляр AECored.
-
-## Обновление
-
-Обновление также выполняется через AEInstall:
-
-```bash
-./AEinstall.sh --update --userid 10
-```
-
-При обновлении старый сервис останавливается, старый код удаляется, из GitHub загружается свежая версия AECored, после чего systemd-сервис создаётся и запускается заново. Конфигурация пользователя сохраняется.
-
-## Удаление
-
-```bash
-./AEinstall.sh --remove --userid 10
-```
-
-## Ручной запуск
-
-Для разработки и отладки ядро можно запускать непосредственно из исходного дерева:
-
-```bash
-python3 -m aecored.aecored config.ini
-```
-
-При запуске через systemd используется тот же `aecored.aecored`. systemd получает `READY=1` и контролирует heartbeat через watchdog.
-
-## Архитектурный принцип
-
-`aecored.py` является главным модулем и отвечает за жизненный цикл самого AECored, а функциональные подсистемы подключаются как отдельные модули. Каждый модуль имеет этапы `initialize()`, `start()`, `stop()` и `shutdown()`.
-
-Каждый экземпляр пользователя является отдельным systemd-сервисом вида `ID_AECored.service`. В дальнейшем в этот каркас будут добавляться планировщик, запуск внешних процессов/драйверов, IPC/API, RabbitMQ/MQTT, MariaDB и административное управление.
