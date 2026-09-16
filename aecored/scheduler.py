@@ -30,7 +30,6 @@ class Scheduler(Module):
     """Запускает внешние Python-программы по cron-расписанию."""
 
     name = "scheduler"
-    CONFIG_CHECK_INTERVAL = 1.0
 
     def __init__(self, config, logger, config_path, cflogger):
         super().__init__(config, logger)
@@ -210,7 +209,7 @@ class Scheduler(Module):
         with self._condition:
             while not self._stopping:
                 if not self._tasks:
-                    self._condition.wait(timeout=self.CONFIG_CHECK_INTERVAL)
+                    self._condition.wait(timeout=self.config.scheduler_check_interval)
                     return None
 
                 now = datetime.now()
@@ -219,7 +218,7 @@ class Scheduler(Module):
 
                 if delay > 0:
                     self._condition.wait(
-                        timeout=min(delay, self.CONFIG_CHECK_INTERVAL)
+                        timeout=min(delay, self.config.scheduler_check_interval)
                     )
                     if self._stopping:
                         return None
@@ -275,7 +274,7 @@ class Scheduler(Module):
     def _build_task_environment(self, task):
         """Подготовить окружение внешнего драйвера для CFLogger."""
         environment = os.environ.copy()
-        environment["AECOR_CONFIG_PATH"] = self.config_path
+        environment["AECOR_CONFIG_PATH"] = self.config.path
         environment["AECOR_ROOT_PATH"] = self.cflogger.root_path
 
         python_path = environment.get("PYTHONPATH", "")
