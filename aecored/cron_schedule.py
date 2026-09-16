@@ -26,12 +26,9 @@ class CronSchedule:
 
         self._fields = []
         self._wildcards = []
-        for index, (value, limits) in enumerate(zip(fields, self.FIELD_LIMITS)):
+        for value, limits in zip(fields, self.FIELD_LIMITS):
             self._fields.append(self._parse_field(value, limits))
-            self._wildcards.append(
-                index in (2, 4)
-                and any(item.strip().startswith("*") for item in value.split(","))
-            )
+            self._wildcards.append(value.strip() == "*")
 
     def next_run(self, after):
         """Вернуть ближайшее время запуска после указанного момента."""
