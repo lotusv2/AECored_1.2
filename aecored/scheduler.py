@@ -32,9 +32,10 @@ class Scheduler(Module):
     name = "scheduler"
     CONFIG_CHECK_INTERVAL = 1.0
 
-    def __init__(self, config, logger, config_path):
+    def __init__(self, config, logger, config_path, cflogger):
         super().__init__(config, logger)
         self.config_path = config_path
+        self.cflogger = cflogger
         self._condition = threading.Condition()
         self._config_lock = threading.Lock()
         self._tasks = []
@@ -248,7 +249,11 @@ class Scheduler(Module):
             task.command,
         )
         try:
-            process = subprocess.Popen([sys.executable, task.command])
+            environment = self._build_task_environment(task)
+            process = subprocess.Popen(
+                [sys.executable, task.command],
+                env=environment,
+            )
             self.logger.info(
                 "Scheduler: задача '%s' запущена, PID=%s",
                 task.name,
@@ -266,6 +271,21 @@ class Scheduler(Module):
                 task.name,
                 task.command,
             )
+
+    def _build_task_environment(self, task):
+        """Подготовить окружение внешнего драйвера для CFLogger."""
+        environment = os.environ.copy()
+        environment["AECOR_CONFIG_PATH"] = self.config_path
+        environment["AECOR_ROOT_PATH"] = self.cflogger.root_path
+
+        python_path = environment.get("PYTHONPATH", "")
+        paths = [self.cflogger.root_path]
+        if python_path:
+            paths.append(python_path)
+        environment["PYTHONPATH"] = os.pathsep.join(paths)
+
+        environment["AECOR_TASK_NAME"] = task.name
+        return environment
 
     def _wait_for_process(self, task_name, process):
         """Дождаться завершения задачи и записать код возврата."""
