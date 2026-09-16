@@ -19,9 +19,8 @@ class AECored:
 
     def __init__(self, config_path):
         self.config_path = config_path
-        self.scheduler_config_path = self._get_scheduler_config_path(config_path)
         self.config = Config(config_path)
-        self.cflogger = CFLogger(config_path)
+        self.cflogger = None
         self.logger = None
         self.watchdog = None
         self.modules = None
@@ -30,20 +29,12 @@ class AECored:
         self.running = False
         self._stopping = False
 
-    @staticmethod
-    def _get_scheduler_config_path(config_path):
-        """Получить путь к отдельной конфигурации Scheduler."""
-        import os
-
-        directory = os.path.dirname(os.path.abspath(config_path))
-        return os.path.join(directory, "scheduler.ini")
-
     def initialize(self):
         """Загрузить конфигурацию и инициализировать подсистемы."""
         self.config.load()
 
-        # CFLogger является первым компонентом, который должен быть готов,
-        # потому что остальные части ядра получают свои логгеры через него.
+        # CFLogger получает уже загруженную конфигурацию и не читает INI сам.
+        self.cflogger = CFLogger(self.config)
         self.cflogger.initialize()
         self.logger = self.cflogger.get_logger("aecored")
 
@@ -58,23 +49,31 @@ class AECored:
         self.watchdog.initialize()
 
         self.modules = ModuleManager(self.config, self.logger)
-        self.scheduler = Scheduler(
-            self.config,
-            self.cflogger.get_logger("scheduler"),
-            self.scheduler_config_path,
-            self.cflogger,
-        )
-        self.http = HttpModule(
-            self.config,
-            self.cflogger.get_logger("http"),
-            self.scheduler,
-        )
 
-        # CFLogger уже подготовлен до создания остальных модулей. Регистрация
-        # в ModuleManager нужна для единого жизненного цикла подсистемы.
+        if self.config.modules.get("scheduler", False):
+            self.scheduler = Scheduler(
+                self.config,
+                self.cflogger.get_logger("scheduler"),
+                self.config.scheduler_config,
+                self.cflogger,
+            )
+            self.modules.register(self.scheduler)
+        else:
+            self.logger.info("Модуль scheduler отключён конфигурацией")
+
+        if self.config.modules.get("http", False):
+            if self.scheduler is None:
+                raise RuntimeError("HTTP-модуль требует включённый Scheduler")
+            self.http = HttpModule(
+                self.config,
+                self.cflogger.get_logger("http"),
+                self.scheduler,
+            )
+            self.modules.register(self.http)
+        else:
+            self.logger.info("Модуль http отключён конфигурацией")
+
         self.modules.register(self.cflogger)
-        self.modules.register(self.scheduler)
-        self.modules.register(self.http)
         self.modules.initialize()
 
     def start(self):
