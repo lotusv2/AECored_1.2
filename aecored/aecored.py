@@ -1,11 +1,11 @@
 """Главный модуль и демон AECored."""
 
 import argparse
-import logging
 import signal
 import sys
 import time
 
+from .cflogger import CFLogger
 from .config import Config, ConfigError
 from .http import HttpModule
 from .lifecycle import ModuleManager
@@ -21,7 +21,8 @@ class AECored:
         self.config_path = config_path
         self.scheduler_config_path = self._get_scheduler_config_path(config_path)
         self.config = Config(config_path)
-        self.logger = logging.getLogger("AECored")
+        self.cflogger = CFLogger(config_path)
+        self.logger = None
         self.watchdog = None
         self.modules = None
         self.scheduler = None
@@ -41,6 +42,11 @@ class AECored:
         """Загрузить конфигурацию и инициализировать подсистемы."""
         self.config.load()
 
+        # CFLogger является первым компонентом, который должен быть готов,
+        # потому что остальные части ядра получают свои логгеры через него.
+        self.cflogger.initialize()
+        self.logger = self.cflogger.get_logger("aecored")
+
         process_name = set_process_name(self.config.user_id)
         self.logger.info(
             "AECored: инициализация, user_id=%s, process_name=%s",
@@ -54,11 +60,18 @@ class AECored:
         self.modules = ModuleManager(self.config, self.logger)
         self.scheduler = Scheduler(
             self.config,
-            self.logger,
+            self.cflogger.get_logger("scheduler"),
             self.scheduler_config_path,
         )
-        self.http = HttpModule(self.config, self.logger, self.scheduler)
+        self.http = HttpModule(
+            self.config,
+            self.cflogger.get_logger("http"),
+            self.scheduler,
+        )
 
+        # CFLogger уже подготовлен до создания остальных модулей. Регистрация
+        # в ModuleManager нужна для единого жизненного цикла подсистемы.
+        self.modules.register(self.cflogger)
         self.modules.register(self.scheduler)
         self.modules.register(self.http)
         self.modules.initialize()
@@ -93,7 +106,8 @@ class AECored:
 
         self._stopping = True
         self.running = False
-        self.logger.info("AECored: остановка")
+        if self.logger is not None:
+            self.logger.info("AECored: остановка")
 
         if self.modules is not None:
             self.modules.stop()
@@ -102,15 +116,8 @@ class AECored:
         if self.watchdog is not None:
             self.watchdog.shutdown()
 
-        self.logger.info("AECored: остановлен")
-
-
-def configure_logging():
-    """Настроить вывод журнала демона."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+        if self.logger is not None:
+            self.logger.info("AECored: остановлен")
 
 
 def install_signal_handlers(daemon):
@@ -135,7 +142,6 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
-    configure_logging()
     daemon = AECored(args.config)
 
     try:
@@ -144,10 +150,16 @@ def main(argv=None):
         daemon.start()
         daemon.run()
     except (ConfigError, ProcessNameError, RuntimeError) as exc:
-        daemon.logger.error("AECored: критическая ошибка: %s", exc)
+        if daemon.logger is not None:
+            daemon.logger.error("AECored: критическая ошибка: %s", exc)
+        else:
+            print("AECored: критическая ошибка: {}".format(exc), file=sys.stderr)
         return 1
     except Exception:
-        daemon.logger.exception("AECored: непредвиденная ошибка")
+        if daemon.logger is not None:
+            daemon.logger.exception("AECored: непредвиденная ошибка")
+        else:
+            print("AECored: непредвиденная ошибка", file=sys.stderr)
         return 1
     finally:
         daemon.stop()
