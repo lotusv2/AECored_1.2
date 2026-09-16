@@ -5,6 +5,7 @@ import logging
 import threading
 
 from flask import Flask, jsonify, request
+from werkzeug.serving import make_server
 
 from .module import Module
 
@@ -23,6 +24,7 @@ class HttpModule(Module):
         self.scheduler = scheduler
         self.app = Flask("AECored-HTTP")
         self._thread = None
+        self._server = None
         self._loggers = []
         self._configure_routes()
 
@@ -59,10 +61,17 @@ class HttpModule(Module):
     def stop(self):
         """Остановить HTTP-сервер."""
         self.running = False
-        # Flask development server будет завершён вместе с daemon-потоком.
+        server = self._server
+        if server is not None:
+            try:
+                server.shutdown()
+            except Exception:
+                self.logger.exception("HTTP-модуль: ошибка остановки сервера")
+
         if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=2)
+            self._thread.join(timeout=5)
         self._thread = None
+        self._server = None
         self.logger.info("Модуль %s остановлен", self.name)
 
     def shutdown(self):
@@ -94,17 +103,24 @@ class HttpModule(Module):
         self._loggers = []
 
     def _run_server(self):
-        """Запустить Flask без встроенного reloader."""
+        """Запустить Flask через управляемый WSGI-сервер."""
+        server = None
         try:
-            self.app.run(
-                host=self.config.http_host,
-                port=self.config.http_port,
-                debug=False,
-                use_reloader=False,
+            server = make_server(
+                self.config.http_host,
+                self.config.http_port,
+                self.app,
                 threaded=True,
             )
+            self._server = server
+            server.serve_forever()
         except Exception:
-            self.logger.exception("HTTP-модуль: ошибка Flask-сервера")
+            self.logger.exception("HTTP-модуль: ошибка HTTP-сервера")
+            self.running = False
+        finally:
+            if server is not None:
+                server.server_close()
+            self._server = None
             self.running = False
 
     def _authorized(self):
